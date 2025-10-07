@@ -1,9 +1,8 @@
-// src/routes/upload.route.ts - Cloudinary (ฟรี 25GB)
+// src/routes/upload.route.ts - Cloudinary (ไม่เก็บ DB)
 import express, { Request, Response } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
-import { pool } from "../dbconn";
 
 export const router = express.Router();
 
@@ -18,11 +17,10 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: "user_avatars", // โฟลเดอร์ใน Cloudinary
+    folder: "user_avatars",
     allowed_formats: ["jpg", "jpeg", "png", "gif"],
-    transformation: [{ width: 500, height: 500, crop: "limit" }], // resize อัตโนมัติ
+    transformation: [{ width: 500, height: 500, crop: "limit" }],
     public_id: (req: any, file: any) => {
-      // ตั้งชื่อไฟล์ unique
       return `avatar_${Date.now()}`;
     },
   } as any,
@@ -30,7 +28,7 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // จำกัด 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif/;
     const mimetype = allowedTypes.test(file.mimetype);
@@ -43,7 +41,7 @@ const upload = multer({
   },
 });
 
-// ===== POST: อัปโหลดรูปภาพ =====
+// ===== POST: อัปโหลดรูปภาพ (ไม่บันทึก DB) =====
 router.post("/", upload.single("file"), async (req: Request, res: Response) => {
   try {
     console.log("📤 เริ่มอัปโหลดไฟล์...");
@@ -53,25 +51,13 @@ router.post("/", upload.single("file"), async (req: Request, res: Response) => {
       return res.status(400).json({ error: "ไม่พบไฟล์ที่อัปโหลด" });
     }
 
-    // Cloudinary จะ return URL มาอัตโนมัติ
     const imageUrl = (req.file as any).path;
     const publicId = (req.file as any).filename;
 
     console.log("✅ อัปโหลดไป Cloudinary สำเร็จ:", imageUrl);
     console.log("📝 Public ID:", publicId);
 
-    const query = `
-      INSERT INTO user_avatar (id, img) 
-      VALUES (1, ?) 
-      ON DUPLICATE KEY UPDATE 
-        img = VALUES(img), 
-        updated_at = CURRENT_TIMESTAMP
-    `;
-
-    console.log("💾 กำลังบันทึกลง Database...");
-    await pool.execute(query, [imageUrl]);
-    console.log("✅ บันทึกลง Database สำเร็จ");
-
+    // ส่ง URL กลับไปให้ Frontend เก็บเอง
     res.json({
       success: true,
       filename: publicId,
@@ -80,14 +66,34 @@ router.post("/", upload.single("file"), async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("❌ เกิดข้อผิดพลาด:", error);
-    console.error(
-      "Error Details:",
-      error instanceof Error ? error.stack : error
-    );
     res.status(500).json({
       error: "อัปโหลดไม่สำเร็จ",
       message: error instanceof Error ? error.message : "Unknown error",
-      details: error instanceof Error ? error.stack : String(error),
+    });
+  }
+});
+
+// ===== DELETE: ลบรูปภาพจาก Cloudinary =====
+router.delete("/:publicId", async (req: Request, res: Response) => {
+  try {
+    const { publicId } = req.params;
+    
+    console.log("🗑️ กำลังลบไฟล์:", publicId);
+
+    const result = await cloudinary.uploader.destroy(`user_avatars/${publicId}`);
+
+    if (result.result === "ok") {
+      console.log("✅ ลบไฟล์สำเร็จ");
+      res.json({ success: true, message: "ลบรูปภาพสำเร็จ" });
+    } else {
+      console.error("❌ ลบไฟล์ไม่สำเร็จ:", result);
+      res.status(404).json({ error: "ไม่พบไฟล์" });
+    }
+  } catch (error) {
+    console.error("❌ เกิดข้อผิดพลาด:", error);
+    res.status(500).json({
+      error: "ลบไฟล์ไม่สำเร็จ",
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 });
@@ -96,11 +102,10 @@ router.post("/", upload.single("file"), async (req: Request, res: Response) => {
 router.get("/", (req: Request, res: Response) => {
   res.json({
     message: "Cloudinary Upload API ready",
-    storage: "Cloudinary (ฟรี 25GB)",
+    storage: "Cloudinary (ฟรี 25GB) - ไม่เก็บ Database",
     endpoints: {
       POST: "/upload - อัปโหลดรูปภาพ",
-      GET: "/upload/current - ดึงรูปภาพล่าสุด",
-      DELETE: "/upload - ลบรูปภาพ",
+      DELETE: "/upload/:publicId - ลบรูปภาพ",
     },
   });
 });
